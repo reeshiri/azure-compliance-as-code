@@ -1,0 +1,285 @@
+# .github/workflows/azure_compliance.yml
+#
+# Runs weekly (and on demand) to:
+#   1. Authenticate to Azure via OIDC — no stored secrets
+#   2. Collect evidence from Azure via Python collectors
+#   3. Generate CSV reports from evidence + controls.yaml
+#   4. Commit evidence and reports back to the repo (timestamped audit trail)
+#   5. Open a GitHub Issue for every FAIL control (deduplicated)
+#
+# ── What is Workload Identity Federation / OIDC? ──────────────────────────
+#   Normally, to let GitHub Actions talk to Azure you would create a Service
+#   Principal, generate a client secret, and store it as a GitHub secret.
+#   That secret can leak, expire, or be forgotten.
+#
+#   With OIDC (OpenID Connect), GitHub Actions generates a short-lived token
+#   for each workflow run. Azure is configured to trust tokens from GitHub's
+#   specific token issuer, but ONLY for this repo.  No secret is ever stored.
+#   The trust is configured once in Azure and then works automatically forever.
+#
+# ── Required setup (one time) ─────────────────────────────────────────────
+#   See docs/azure_setup.md for step-by-step instructions.
+#
+# ── Required GitHub repository secrets ───────────────────────────────────
+#   AZURE_CLIENT_ID       — App registration client ID (not a secret - just an ID)
+#   AZURE_TENANT_ID       — Your Azure tenant / directory ID
+#   AZURE_SUBSCRIPTION_ID — The subscription being assessed
+#
+# ── Required GitHub repository variables (Settings > Variables) ───────────
+#   None additional — subscription and tenant come from secrets above.
+#
+# NOTE: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID are
+# technically not secrets (they are IDs, not passwords), but storing them
+# as secrets is good practice to avoid exposing your tenant topology.
+
+name: Azure Compliance — collect and report
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"    # 06:00 UTC every Monday (matches AWS workflow cadence)
+  workflow_dispatch:         # allow manual trigger from the Actions tab
+    inputs:
+      subscription_id:
+        description: "Override subscription ID (leave blank to use secret)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write    # required: lets the workflow request an OIDC token from GitHub
+  contents: write    # required: lets the workflow commit evidence and reports back
+  issues: write      # required: lets the workflow open GitHub Issues for gaps
+
+jobs:
+  collect-and-report:
+    name: Collect Azure evidence and generate reports
+    runs-on: ubuntu-latest
+    timeout-minutes: 45   # Azure Graph API calls can be slow for large tenants
+
+    env:
+      SUBSCRIPTION_ID: ${{ inputs.subscription_id || secrets.AZURE_SUBSCRIPTION_ID }}
+      EVIDENCE_DIR: evidence
+      REPORTS_DIR: reports
+      PYTHON_VERSION: "3.11"
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # full history so git blame works in audits
+
+      # ── 2. Python setup ───────────────────────────────────────────────────
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyyaml
+
+      # ── 3. Authenticate to Azure via OIDC ─────────────────────────────────
+      # This step exchanges the GitHub OIDC token for an Azure access token.
+      # It sets AZURE_CLIENT_ID, AZURE_TENANT_ID, and AZURE_SUBSCRIPTION_ID
+      # as environment variables that DefaultAzureCredential picks up automatically.
+      # No passwords, no secrets rotation required.
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.SUBSCRIPTION_ID }}
+
+      # ── 4. Run collectors ─────────────────────────────────────────────────
+      - name: Run all Azure collectors
+        id: collect
+        run: |
+          python collectors/run_all.py \
+            --subscription-id "${{ env.SUBSCRIPTION_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}"
+        env:
+          EVIDENCE_DIR: ${{ github.workspace }}/${{ env.EVIDENCE_DIR }}
+
+      # ── 5. Generate CSV reports ───────────────────────────────────────────
+      - name: Generate compliance reports
+        id: report
+        run: |
+          python generate_report.py \
+            --evidence-dir "$EVIDENCE_DIR" \
+            --controls controls.yaml \
+            --output-dir "$REPORTS_DIR"
+
+          # Count failing signals for the commit message and issue step
+          FAIL_COUNT=$(python - <<'EOF'
+          import csv, pathlib, sys
+          path = pathlib.Path("${{ env.REPORTS_DIR }}/01_summary.csv")
+          if not path.exists():
+              print(0); sys.exit(0)
+          rows = list(csv.DictReader(open(path)))
+          print(sum(1 for r in rows if r.get("status") == "FAIL"))
+          EOF
+          )
+          FINDING_COUNT=$(python - <<'EOF'
+          import csv, pathlib, sys
+          path = pathlib.Path("${{ env.REPORTS_DIR }}/03_findings_detail.csv")
+          if not path.exists():
+              print(0); sys.exit(0)
+          print(sum(1 for _ in csv.DictReader(open(path))))
+          EOF
+          )
+          echo "fail_count=${FAIL_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "finding_count=${FINDING_COUNT}" >> "$GITHUB_OUTPUT"
+
+      # ── 6. Commit evidence and reports back to repo ───────────────────────
+      # This creates the timestamped audit trail in git history.
+      # Every commit message includes the run ID so you can trace any
+      # artifact back to the exact workflow run that produced it.
+      - name: Commit evidence and reports
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add evidence/ reports/
+          git diff --cached --quiet && echo "Nothing to commit" && exit 0
+
+          RUN_DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          git commit -m "chore(azure-compliance): evidence + reports ${RUN_DATE}
+
+          Collectors  : Activity Logs, Entra ID, Azure Policy, Defender for Cloud
+          Subscription: ${{ env.SUBSCRIPTION_ID }}
+          Fails       : ${{ steps.report.outputs.fail_count }}
+          Findings    : ${{ steps.report.outputs.finding_count }}
+          Run         : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          git push
+
+      # ── 7. Open / update GitHub Issues for each FAIL ─────────────────────
+      # For every failing signal in 01_summary.csv, this step opens a GitHub
+      # Issue with the affected resources, framework IDs, and remediation steps.
+      # Issues are deduplicated by title so re-runs don't create duplicates
+      # — they only open new issues for NEW failures.
+      - name: Open issues for failing controls
+        if: steps.report.outputs.fail_count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs   = require('fs');
+            const path = require('path');
+
+            // Minimal CSV parser — avoids adding npm dependencies to the workflow
+            function parseCsv(text) {
+              const [header, ...lines] = text.trim().split('\n');
+              const keys = header.split(',').map(k => k.trim().replace(/^"|"$/g, ''));
+              return lines.map(line => {
+                const vals = [];
+                let cur = '', inQ = false;
+                for (const ch of line) {
+                  if (ch === '"') { inQ = !inQ; }
+                  else if (ch === ',' && !inQ) { vals.push(cur.trim()); cur = ''; }
+                  else { cur += ch; }
+                }
+                vals.push(cur.trim());
+                return Object.fromEntries(
+                  keys.map((k, i) => [k, (vals[i] || '').replace(/^"|"$/g, '')])
+                );
+              });
+            }
+
+            const ws = process.env.GITHUB_WORKSPACE;
+            const summaryRows = parseCsv(
+              fs.readFileSync(path.join(ws, 'reports/01_summary.csv'), 'utf8')
+            );
+            const detailPath = path.join(ws, 'reports/03_findings_detail.csv');
+            const detailRows = fs.existsSync(detailPath)
+              ? parseCsv(fs.readFileSync(detailPath, 'utf8'))
+              : [];
+
+            const failRows = summaryRows.filter(r => r.status === 'FAIL');
+
+            // Fetch existing open compliance issues to avoid duplicates
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              state: 'open',
+              labels: 'azure-compliance,automated',
+              per_page: 100,
+            });
+            const existingTitles = new Set(existing.data.map(i => i.title));
+
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const runDate = new Date().toISOString().slice(0, 10);
+            const sub = process.env.SUBSCRIPTION_ID || 'N/A';
+
+            for (const row of failRows) {
+              const title = `[Azure Compliance] FAIL — ${row.description}`;
+              if (existingTitles.has(title)) {
+                console.log(`Skipping duplicate: ${title}`);
+                continue;
+              }
+
+              // Pull up to 10 related detail findings for this evidence source
+              const related = detailRows
+                .filter(d => d.evidence_id === row.evidence_id)
+                .slice(0, 10);
+
+              const detailTable = related.length > 0
+                ? `### Affected resources\n\n| Resource | Detail | Remediation |\n|---|---|---|\n` +
+                  related.map(d =>
+                    `| \`${d.resource}\` | ${d.detail || '—'} | ${d.remediation || '—'} |`
+                  ).join('\n')
+                : '';
+
+              const body = `## Azure compliance gap detected
+
+            | Field | Value |
+            |---|---|
+            | **Signal** | \`${row.signal}\` |
+            | **Evidence** | \`${row.evidence_id}\` |
+            | **Azure subscription** | \`${sub}\` |
+            | **Detected** | ${runDate} |
+            | **PCI-DSS** | ${row['PCI-DSS'] || '—'} |
+            | **SOC 2** | ${row['SOC 2'] || '—'} |
+            | **ISO 27001** | ${row['ISO 27001'] || '—'} |
+            | **ISO 42001** | ${row['ISO 42001'] || '—'} |
+
+            ${detailTable}
+
+            ### Next steps
+            1. Review the evidence artifact in \`evidence/${row.evidence_id}/latest.json\`
+            2. Remediate the finding in Azure portal
+            3. Re-run the [collector workflow](${runUrl}) to verify
+            4. Close this issue once the signal shows PASS
+
+            ---
+            *Opened automatically by the Azure compliance workflow · [Run ${context.runId}](${runUrl})*`;
+
+              await github.rest.issues.create({
+                owner:  context.repo.owner,
+                repo:   context.repo.repo,
+                title,
+                body,
+                labels: [
+                  'azure-compliance',
+                  'automated',
+                  row.evidence_id.replace(/_/g, '-'),
+                ],
+              });
+
+              console.log(`Opened issue: ${title}`);
+            }
+
+      # ── 8. Job summary ────────────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Azure Compliance run — $(date -u +"%Y-%m-%d %H:%M UTC")
+
+          | | |
+          |---|---|
+          | **Subscription** | ${{ env.SUBSCRIPTION_ID }} |
+          | **Failing controls** | ${{ steps.report.outputs.fail_count || 'N/A' }} |
+          | **Total findings** | ${{ steps.report.outputs.finding_count || 'N/A' }} |
+          | **Reports** | \`reports/01_summary.csv\`, \`02_control_coverage.csv\`, \`03_findings_detail.csv\` |
+
+          EOF

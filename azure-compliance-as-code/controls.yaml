@@ -1,0 +1,232 @@
+# controls.yaml — Azure compliance signal to framework control ID mapping
+#
+# This file is the brain of the compliance system. It tells generate_report.py
+# how to translate raw evidence signals into compliance framework control IDs.
+#
+# Every row in 01_summary.csv and every row in 02_control_coverage.csv
+# comes directly from the entries in this file.
+#
+# Key concept — one signal, many frameworks:
+#   A single piece of evidence (e.g. "all users have MFA") satisfies multiple
+#   control IDs across all four frameworks simultaneously. This is the core
+#   efficiency of compliance-as-code: collect once, satisfy many.
+#
+# Structure:
+#   evidence_id   : must match the folder name under evidence/
+#                   and the evidence_id passed to the collector
+#   signal        : key inside the compliance_signals dict in the artifact
+#   description   : plain-English label used in reports and GitHub Issues
+#   frameworks    : control IDs per framework that this signal satisfies
+
+controls:
+
+  # ── Azure Monitor / Activity Logs ─────────────────────────────────────────
+  # Equivalent to AWS CloudTrail controls
+
+  - evidence_id: azure_activity_logs
+    signal: diagnostic_settings_configured
+    description: Activity log diagnostic settings are configured on the subscription
+    frameworks:
+      pci_dss:   ["10.2.1", "10.2.2"]
+      soc2:      ["CC7.2"]
+      iso_27001: ["A.8.15"]
+      iso_42001: ["6.5.1"]
+
+  - evidence_id: azure_activity_logs
+    signal: logs_sent_to_storage_or_law
+    description: Activity logs are sent to a durable destination (storage or Log Analytics)
+    frameworks:
+      pci_dss:   ["10.3.3"]
+      soc2:      ["CC7.2"]
+      iso_27001: ["A.8.15"]
+
+  - evidence_id: azure_activity_logs
+    signal: retention_meets_90_days
+    description: Activity log retention is configured for 90 days or more
+    frameworks:
+      pci_dss:   ["10.7.1"]
+      soc2:      ["CC7.2"]
+      iso_27001: ["A.8.15"]
+      iso_42001: ["6.5.1"]
+
+  - evidence_id: azure_activity_logs
+    signal: activity_log_alerts_configured
+    description: At least one activity log alert rule is enabled
+    frameworks:
+      pci_dss:   ["10.2.1", "10.2.2"]
+      soc2:      ["CC7.2"]
+      iso_27001: ["A.8.15"]
+
+  - evidence_id: azure_activity_logs
+    signal: active_logging_confirmed
+    description: Write events observed in the activity log within the lookback window
+    frameworks:
+      pci_dss:   ["10.2.1"]
+      soc2:      ["CC7.2"]
+      iso_27001: ["A.8.15"]
+      iso_42001: ["6.5.1"]
+
+  # ── Entra ID / Azure Active Directory ────────────────────────────────────
+  # Equivalent to AWS IAM controls
+
+  - evidence_id: azure_entra_id_posture
+    signal: all_users_have_mfa
+    description: All enabled Entra ID users have at least one MFA method registered
+    frameworks:
+      pci_dss:   ["8.4.2", "8.4.3"]
+      soc2:      ["CC6.1"]
+      iso_27001: ["A.5.17"]
+      iso_42001: ["6.4.1"]
+
+  - evidence_id: azure_entra_id_posture
+    signal: mfa_conditional_access_enforced
+    description: A Conditional Access policy enforcing MFA is enabled
+    frameworks:
+      pci_dss:   ["8.4.2", "8.4.3"]
+      soc2:      ["CC6.1"]
+      iso_27001: ["A.5.17"]
+      iso_42001: ["6.4.1"]
+
+  - evidence_id: azure_entra_id_posture
+    signal: global_admin_count_acceptable
+    description: Tenant has 4 or fewer Global Administrators (Microsoft recommendation)
+    frameworks:
+      pci_dss:   ["7.1.1"]
+      soc2:      ["CC6.1"]
+      iso_27001: ["A.5.15", "A.5.16"]
+      iso_42001: ["6.4.1"]
+
+  - evidence_id: azure_entra_id_posture
+    signal: no_stale_service_principal_credentials
+    description: No expired or stale service principal credentials detected
+    frameworks:
+      pci_dss:   ["8.3.9"]
+      soc2:      ["CC6.1", "CC6.2"]
+      iso_27001: ["A.5.16", "A.5.18"]
+
+  - evidence_id: azure_entra_id_posture
+    signal: no_direct_broad_role_at_sub_scope
+    description: No user has Owner or Contributor assigned directly at subscription scope
+    frameworks:
+      pci_dss:   ["7.1.1", "8.2.1"]
+      soc2:      ["CC6.1"]
+      iso_27001: ["A.5.15"]
+      iso_42001: ["6.4.1"]
+
+  # ── Azure Policy ─────────────────────────────────────────────────────────
+  # Equivalent to AWS Config rules controls
+
+  - evidence_id: azure_policy_compliance
+    signal: all_policies_compliant
+    description: All Azure Policy rules are compliant across the subscription
+    frameworks:
+      pci_dss:   ["2.2.1", "6.3.3"]
+      soc2:      ["CC6.6", "CC7.1"]
+      iso_27001: ["A.8.9"]
+      iso_42001: ["6.6.1"]
+
+  - evidence_id: azure_policy_compliance
+    signal: compliance_rate_above_90pct
+    description: Azure Policy compliance rate is 90% or above
+    frameworks:
+      pci_dss:   ["2.2.1"]
+      soc2:      ["CC6.6"]
+      iso_27001: ["A.8.9"]
+      iso_42001: ["6.6.1"]
+
+  - evidence_id: azure_policy_compliance
+    signal: no_high_value_policy_failures
+    description: No failures on high-value security policies (MFA, SSH, RDP, encryption)
+    frameworks:
+      pci_dss:   ["2.2.1", "7.1.1", "8.4.2"]
+      soc2:      ["CC6.1", "CC6.6", "CC7.1"]
+      iso_27001: ["A.5.15", "A.8.9", "A.8.24"]
+      iso_42001: ["6.4.1", "6.6.1"]
+
+  - evidence_id: azure_policy_compliance
+    signal: azure_security_benchmark_assigned
+    description: Azure Security Benchmark policy initiative is assigned to the subscription
+    frameworks:
+      pci_dss:   ["2.2.1", "11.3.1"]
+      soc2:      ["CC7.1"]
+      iso_27001: ["A.8.8", "A.8.9"]
+
+  - evidence_id: azure_policy_compliance
+    signal: pci_policy_initiative_assigned
+    description: A PCI-DSS policy initiative is assigned to the subscription
+    frameworks:
+      pci_dss:   ["2.2.1", "11.3.1"]
+      soc2:      ["CC7.1"]
+      iso_27001: ["A.8.8"]
+
+  # ── Microsoft Defender for Cloud ─────────────────────────────────────────
+  # Equivalent to AWS Security Hub controls
+
+  - evidence_id: azure_defender_findings
+    signal: defender_cspm_enabled
+    description: Microsoft Defender CSPM plan is enabled
+    frameworks:
+      pci_dss:   ["11.3.1", "11.3.2"]
+      soc2:      ["CC7.1", "CC7.2"]
+      iso_27001: ["A.8.8"]
+      iso_42001: ["6.6.2"]
+
+  - evidence_id: azure_defender_findings
+    signal: defender_servers_enabled
+    description: Defender for Servers plan is enabled
+    frameworks:
+      pci_dss:   ["11.3.1"]
+      soc2:      ["CC7.1"]
+      iso_27001: ["A.8.8"]
+
+  - evidence_id: azure_defender_findings
+    signal: defender_storage_enabled
+    description: Defender for Storage plan is enabled
+    frameworks:
+      pci_dss:   ["11.3.1"]
+      soc2:      ["CC7.1"]
+      iso_27001: ["A.8.8"]
+      iso_42001: ["6.6.2"]
+
+  - evidence_id: azure_defender_findings
+    signal: all_expected_plans_enabled
+    description: All expected Defender for Cloud plans are enabled
+    frameworks:
+      pci_dss:   ["6.3.3", "11.3.1"]
+      soc2:      ["CC7.1", "CC7.2"]
+      iso_27001: ["A.8.8"]
+      iso_42001: ["6.6.2"]
+
+  - evidence_id: azure_defender_findings
+    signal: secure_score_above_70pct
+    description: Defender for Cloud Secure Score is 70% or above
+    frameworks:
+      pci_dss:   ["2.2.1"]
+      soc2:      ["CC6.6", "CC7.1"]
+      iso_27001: ["A.8.8", "A.8.9"]
+      iso_42001: ["6.6.1"]
+
+  - evidence_id: azure_defender_findings
+    signal: no_critical_alerts
+    description: Zero CRITICAL severity security alerts in Defender for Cloud
+    frameworks:
+      pci_dss:   ["6.3.3", "11.3.1"]
+      soc2:      ["CC7.1", "CC7.2"]
+      iso_27001: ["A.8.8"]
+      iso_42001: ["6.6.2"]
+
+  - evidence_id: azure_defender_findings
+    signal: no_high_alerts
+    description: Zero HIGH severity security alerts in Defender for Cloud
+    frameworks:
+      pci_dss:   ["6.3.3"]
+      soc2:      ["CC7.1"]
+      iso_27001: ["A.8.8"]
+
+  - evidence_id: azure_defender_findings
+    signal: security_contact_configured
+    description: A security contact email is configured in Defender for Cloud
+    frameworks:
+      pci_dss:   ["12.10.2"]
+      soc2:      ["CC7.2"]
+      iso_27001: ["A.6.1.1"]

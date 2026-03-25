@@ -1,0 +1,23 @@
+# Core Azure SDKs
+# These are the Python packages the collectors use to talk to Azure APIs.
+#
+# azure-identity       — handles ALL authentication methods (OIDC, CLI, managed identity)
+#                        DefaultAzureCredential from this package is used everywhere
+# azure-mgmt-monitor   — Activity Logs, diagnostic settings, alert rules
+# azure-mgmt-security  — Defender for Cloud (plans, secure score, alerts, recommendations)
+# azure-mgmt-policyinsights  — Azure Policy compliance states and resource evaluations
+# azure-mgmt-resource  — Policy assignments and initiative listing
+# azure-mgmt-authorization   — RBAC role assignments at subscription scope
+# msgraph-sdk          — Microsoft Graph API (Entra ID users, MFA, Conditional Access,
+#                        directory roles, service principals)
+
+azure-identity>=1.15.0
+azure-mgmt-monitor>=6.0.0
+azure-mgmt-security>=6.0.0
+azure-mgmt-policyinsights>=1.1.0
+azure-mgmt-resource>=23.0.0
+azure-mgmt-authorization>=4.0.0
+msgraph-sdk>=1.0.0
+
+# Report generation (same as AWS project)
+pyyaml>=6.0
