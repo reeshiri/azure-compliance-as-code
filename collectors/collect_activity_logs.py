@@ -34,7 +34,7 @@ from datetime import datetime, timezone, timedelta
 
 from azure.identity import DefaultAzureCredential
 from azure.mgmt.monitor import MonitorManagementClient
-from azure.mgmt.monitor.models import DiagnosticSettingsResource
+
 
 from base import BaseCollector
 
