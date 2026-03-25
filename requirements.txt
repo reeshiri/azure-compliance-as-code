@@ -18,6 +18,7 @@ azure-mgmt-policyinsights==1.0.0
 azure-mgmt-resource>=23.0.0
 azure-mgmt-authorization>=4.0.0
 msgraph-sdk>=1.0.0
+six>=1.16.0
 
 # Report generation (same as AWS project)
 pyyaml>=6.0
