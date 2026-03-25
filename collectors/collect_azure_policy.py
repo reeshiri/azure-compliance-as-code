@@ -156,28 +156,28 @@ class AzurePolicyCollector(BaseCollector):
         # Microsoft Defender for Cloud automatically assigns built-in initiatives
         # like Azure Security Benchmark when it is enabled.
         initiatives = []
-try:
-    import requests
-    token = self.credential.get_token(
-        "https://management.azure.com/.default"
-    ).token
-    url = (
-        f"https://management.azure.com/subscriptions/"
-        f"{self.subscription_id}/providers/Microsoft.Authorization/"
-        f"policyAssignments?api-version=2022-06-01"
-    )
-    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"})
-    if resp.status_code == 200:
-        for assignment in resp.json().get("value", []):
-            props = assignment.get("properties", {})
-            initiatives.append({
-                "name": props.get("displayName") or assignment.get("name"),
-                "policy_definition_id": props.get("policyDefinitionId", ""),
-                "enforcement_mode": props.get("enforcementMode", ""),
-                "scope": props.get("scope", ""),
-            })
-except Exception:
-    pass
+        try:
+            import requests
+            token = self.credential.get_token(
+                "https://management.azure.com/.default"
+            ).token
+            url = (
+                f"https://management.azure.com/subscriptions/"
+                f"{self.subscription_id}/providers/Microsoft.Authorization/"
+                f"policyAssignments?api-version=2022-06-01"
+            )
+            resp = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+            if resp.status_code == 200:
+                for assignment in resp.json().get("value", []):
+                    props = assignment.get("properties", {})
+                    initiatives.append({
+                        "name": props.get("displayName") or assignment.get("name"),
+                        "policy_definition_id": props.get("policyDefinitionId", ""),
+                        "enforcement_mode": props.get("enforcementMode", ""),
+                        "scope": props.get("scope", ""),
+                    })
+        except Exception:
+            pass
 
         # ── Compliance signals ──────────────────────────────────────────────
         total_evaluated = compliant_count + non_compliant_count
