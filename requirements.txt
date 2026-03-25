@@ -16,7 +16,6 @@ azure-mgmt-monitor>=6.0.0
 azure-mgmt-security>=6.0.0
 azure-mgmt-policyinsights==1.0.0
 azure-mgmt-resource>=23.0.0
-azure-mgmt-policy>=0.1.0
 azure-mgmt-authorization>=4.0.0
 msgraph-sdk>=1.0.0
 six>=1.16.0
