@@ -33,7 +33,7 @@ Controls satisfied:
 import argparse
 from azure.identity import DefaultAzureCredential
 from azure.mgmt.policyinsights import PolicyInsightsClient
-from azure.mgmt.resource import PolicyClient
+from azure.mgmt.resource.policy import PolicyClient
 
 from base import BaseCollector
 
