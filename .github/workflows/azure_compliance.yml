@@ -100,6 +100,14 @@ jobs:
         env:
           EVIDENCE_DIR: ${{ github.workspace }}/${{ env.EVIDENCE_DIR }}
 
+      - name: Show evidence errors
+        if: always()
+        run: |
+          for f in evidence/*/latest.json; do
+            echo "=== $f ==="
+            cat "$f" | python -c "import sys,json; d=json.load(sys.stdin); print(d.get('error','ok'))"
+          done    
+
       # ── 5. Generate CSV reports ───────────────────────────────────────────
       - name: Generate compliance reports
         id: report
