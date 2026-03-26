@@ -1,0 +1,26 @@
+{
+  "evidence_id": "azure_policy_compliance",
+  "collector": "AzurePolicyCollector",
+  "collected_at": "2026-03-26T19:59:21.355493+00:00",
+  "azure_tenant": "e20a0514-fd7d-429a-89b6-ca19fb99c1ee",
+  "azure_sub": "bca05e97-905c-469b-8a0f-880e41de7548",
+  "status": "ok",
+  "data": {
+    "total_policies_evaluated": 0,
+    "compliant_resources": 0,
+    "non_compliant_resources": 0,
+    "compliance_percentage": 0,
+    "policy_summaries_with_failures": [],
+    "non_compliant_resource_sample": [],
+    "initiatives_assigned": [],
+    "compliance_signals": {
+      "all_policies_compliant": true,
+      "compliance_rate_above_90pct": false,
+      "no_high_value_policy_failures": true,
+      "azure_security_benchmark_assigned": false,
+      "pci_policy_initiative_assigned": false,
+      "high_value_failures": [],
+      "non_compliant_resource_count": 0
+    }
+  }
+}
