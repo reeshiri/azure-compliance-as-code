@@ -1,24 +1,19 @@
-# Core Azure SDKs
-# These are the Python packages the collectors use to talk to Azure APIs.
+# Azure Compliance Collector Dependencies
 #
-# azure-identity       — handles ALL authentication methods (OIDC, CLI, managed identity)
-#                        DefaultAzureCredential from this package is used everywhere
-# azure-mgmt-monitor   — Activity Logs, diagnostic settings, alert rules
-# azure-mgmt-security  — Defender for Cloud (plans, secure score, alerts, recommendations)
-# azure-mgmt-policyinsights  — Azure Policy compliance states and resource evaluations
-# azure-mgmt-resource  — Policy assignments and initiative listing
-# azure-mgmt-authorization   — RBAC role assignments at subscription scope
-# msgraph-sdk          — Microsoft Graph API (Entra ID users, MFA, Conditional Access,
-#                        directory roles, service principals)
+# We use direct REST API calls (via requests) for most collectors rather than
+# the azure-mgmt-* SDK clients. This avoids breaking changes between SDK major
+# versions which have caused repeated import errors.
+#
+# The SDK clients we still use:
+#   azure-identity        — DefaultAzureCredential (handles OIDC, CLI, managed identity)
+#   azure-mgmt-authorization — RBAC role assignments (stable, used in collect_entra_id.py)
+#
+# Everything else goes through requests + bearer token directly against the
+# Azure REST API and Microsoft Graph REST API.
 
 azure-identity>=1.15.0
-azure-mgmt-monitor>=6.0.0
-azure-mgmt-security>=6.0.0
-azure-mgmt-policyinsights==1.0.0
-azure-mgmt-resource>=23.0.0
 azure-mgmt-authorization>=4.0.0
-msgraph-sdk>=1.0.0
-six>=1.16.0
+requests>=2.31.0
 
-# Report generation (same as AWS project)
+# Report generation
 pyyaml>=6.0

@@ -2,29 +2,10 @@
 collect_defender.py — Microsoft Defender for Cloud evidence collector
 
 Evidence ID : azure_defender_findings
-SDK needed  : azure-mgmt-security
-RBAC needed : Security Reader (built-in) on the subscription
+Auth needed : Bearer token via DefaultAzureCredential (Security Reader on subscription)
 
-What Defender for Cloud is and why it matters:
-  Microsoft Defender for Cloud is Azure's unified security posture management
-  and threat protection platform. It is the direct equivalent of AWS Security Hub.
-
-  It does two things:
-    1. Secure Score  — gives you a percentage score based on how many
-                       security recommendations you have implemented
-    2. Alerts        — generates threat detection alerts (like GuardDuty)
-
-  For compliance, we care about:
-    - Whether Defender plans are enabled (proves active monitoring)
-    - Secure Score (a single number representing your overall posture)
-    - Active recommendations at High/Critical severity (your gap list)
-    - Active security alerts at High/Critical severity (active threats)
-
-Azure equivalent mapping:
-  Security Hub enabled          →  Defender for Cloud enabled per plan
-  Security Hub standards        →  Defender plans (CSPM, Servers, Storage, etc.)
-  Critical/High findings sample →  High/Critical recommendations + alerts
-  No critical findings signal   →  no_critical_alerts signal
+Uses direct REST API calls rather than azure-mgmt-security SDK to avoid
+the PricingsOperations.list() signature change in v7.
 
 Controls satisfied:
   PCI-DSS   6.3.3, 11.3.1, 11.3.2
@@ -34,202 +15,189 @@ Controls satisfied:
 """
 
 import argparse
+import requests
 from collections import defaultdict
 
 from azure.identity import DefaultAzureCredential
-from azure.mgmt.security import SecurityCenter
-from azure.mgmt.security.models import SecurityContact
 
 from base import BaseCollector
 
-# Defender plans we expect to be enabled.
-# "Free" tier = basic recommendations only.
-# "Standard" (now called "Defender for X") = full threat detection + compliance.
+ARM = "https://management.azure.com"
+
 EXPECTED_PLANS = {
-    "VirtualMachines",   # Defender for Servers
-    "SqlServers",        # Defender for SQL
-    "AppServices",       # Defender for App Service
-    "StorageAccounts",   # Defender for Storage
-    "KeyVaults",         # Defender for Key Vault
-    "Containers",        # Defender for Containers (replaces AKS)
-    "Arm",               # Defender for Resource Manager
+    "VirtualMachines",
+    "SqlServers",
+    "AppServices",
+    "StorageAccounts",
+    "KeyVaults",
+    "Containers",
+    "Arm",
 }
 
 
 class DefenderCollector(BaseCollector):
 
+    def _headers(self):
+        token = self.credential.get_token(f"{ARM}/.default").token
+        return {"Authorization": f"Bearer {token}"}
+
+    def _get(self, url, params=None):
+        h = self._headers()
+        results = []
+        while url:
+            resp = requests.get(url, headers=h, params=params)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            # Some endpoints return a single object, others return value list
+            if "value" in data:
+                results.extend(data["value"])
+            else:
+                return data  # single object response
+            url = data.get("nextLink")
+            params = None
+        return results
+
     def collect(self) -> dict:
-        security = SecurityCenter(self.credential, self.subscription_id)
+        sub = self.subscription_id
 
         # ── 1. Defender plan status ─────────────────────────────────────────
-        # Each resource type has its own Defender plan that can be toggled on/off.
-        # A plan in "Standard" pricing tier means full Defender is enabled for
-        # that resource type. "Free" means only basic posture management.
-        pricings = list(security.pricings.list())
-        plan_status = {}
-        for plan in pricings:
-            plan_status[plan.name] = {
-                "pricing_tier": plan.pricing_tier,
-                "enabled": plan.pricing_tier == "Standard",
-            }
+        # Each resource type has its own pricing tier (Free vs Standard).
+        # Standard = Defender fully enabled for that resource type.
+        pricings_url = (
+            f"{ARM}/subscriptions/{sub}/providers/Microsoft.Security"
+            f"/pricings?api-version=2024-01-01"
+        )
+        raw_pricings = self._get(pricings_url)
 
-        plans_enabled = [
-            p for p in EXPECTED_PLANS
-            if plan_status.get(p, {}).get("enabled", False)
-        ]
-        plans_disabled = [
-            p for p in EXPECTED_PLANS
-            if not plan_status.get(p, {}).get("enabled", False)
-        ]
+        plan_status = {}
+        if isinstance(raw_pricings, list):
+            for plan in raw_pricings:
+                props = plan.get("properties", {})
+                name = plan.get("name", "")
+                plan_status[name] = {
+                    "pricing_tier": props.get("pricingTier", "Free"),
+                    "enabled": props.get("pricingTier") == "Standard",
+                }
+
+        plans_enabled = [p for p in EXPECTED_PLANS if plan_status.get(p, {}).get("enabled", False)]
+        plans_disabled = [p for p in EXPECTED_PLANS if not plan_status.get(p, {}).get("enabled", False)]
 
         # ── 2. Secure Score ─────────────────────────────────────────────────
-        # The Secure Score is a single number (0-100%) that tells you what
-        # percentage of security controls you have satisfied. Auditors often
-        # ask for this as a snapshot of overall posture.
-        try:
-            scores = list(security.secure_scores.list())
-            secure_score = None
-            for score in scores:
-                if score.name == "ascScore":
-                    if score.score and score.score.current is not None:
-                        max_score = score.score.max or 1
-                        secure_score = round(
-                            score.score.current / max_score * 100, 1
-                        )
-                    break
-        except Exception:
-            secure_score = None
+        score_url = (
+            f"{ARM}/subscriptions/{sub}/providers/Microsoft.Security"
+            f"/secureScores?api-version=2020-01-01"
+        )
+        raw_scores = self._get(score_url)
+        secure_score = None
 
-        # ── 3. Active security recommendations ─────────────────────────────
-        # Recommendations are suggestions to improve your posture.
-        # Unlike alerts (which are active threats), recommendations are
-        # configuration gaps. Think of them like Config rule findings.
-        # We pull High and Critical ones as these map to your framework gaps.
+        if isinstance(raw_scores, list):
+            for score in raw_scores:
+                if score.get("name") == "ascScore":
+                    props = score.get("properties", {})
+                    score_val = props.get("score", {})
+                    current = score_val.get("current")
+                    maximum = score_val.get("max") or 1
+                    if current is not None:
+                        secure_score = round(current / maximum * 100, 1)
+                    break
+
+        # ── 3. Active security assessments (recommendations) ────────────────
+        assessments_url = (
+            f"{ARM}/subscriptions/{sub}/providers/Microsoft.Security"
+            f"/assessments?api-version=2021-06-01"
+        )
+        raw_assessments = self._get(assessments_url)
+
         rec_counts = defaultdict(int)
         critical_recs = []
         high_recs = []
 
-        try:
-            tasks = list(security.tasks.list())
-            for task in tasks:
-                sev = (
-                    task.security_task_parameters.additional_properties.get(
-                        "severity", "UNKNOWN"
-                    )
-                    if task.security_task_parameters else "UNKNOWN"
-                ).upper()
-
-                rec_counts[sev] += 1
-
-                rec_summary = {
-                    "recommendation_name": task.name,
-                    "state": task.state,
-                    "severity": sev,
-                    "resource_id": getattr(task, "resource_id", None),
-                }
-
-                if sev == "HIGH" and len(high_recs) < 10:
-                    high_recs.append(rec_summary)
-                elif sev == "CRITICAL" and len(critical_recs) < 10:
-                    critical_recs.append(rec_summary)
-        except Exception:
-            pass
-
-        # Also check assessments (the newer Defender for Cloud API surface)
-        try:
-            assessments = list(security.assessments.list(scope=f"/subscriptions/{self.subscription_id}"))
-            for assessment in assessments:
-                status_code = (
-                    assessment.status.code if assessment.status else "Unknown"
-                )
-                if status_code != "Unhealthy":
+        if isinstance(raw_assessments, list):
+            for assessment in raw_assessments:
+                props = assessment.get("properties", {})
+                status = props.get("status", {}).get("code", "")
+                if status != "Unhealthy":
                     continue
 
-                sev = "UNKNOWN"
-                if assessment.metadata and assessment.metadata.severity:
-                    sev = assessment.metadata.severity.upper()
-
+                metadata = props.get("metadata", {}) or {}
+                sev = metadata.get("severity", "UNKNOWN").upper()
                 rec_counts[sev] += 1
 
                 summary = {
                     "recommendation_name": (
-                        assessment.display_name or assessment.name
+                        props.get("displayName")
+                        or assessment.get("name", "")
                     ),
                     "resource_id": (
-                        assessment.resource_details.id
-                        if assessment.resource_details else None
+                        props.get("resourceDetails", {}).get("Id")
+                        or assessment.get("id", "")
                     ),
                     "severity": sev,
-                    "description": (
-                        assessment.metadata.description[:200]
-                        if assessment.metadata and assessment.metadata.description
-                        else None
-                    ),
-                    "remediation": (
-                        assessment.metadata.remediation_description[:300]
-                        if assessment.metadata and assessment.metadata.remediation_description
-                        else "See Defender for Cloud portal for remediation steps."
-                    ),
+                    "description": (metadata.get("description") or "")[:200],
+                    "remediation": (metadata.get("remediationDescription") or
+                                   "See Defender for Cloud portal for remediation steps.")[:300],
                 }
 
                 if sev == "CRITICAL" and len(critical_recs) < 10:
                     critical_recs.append(summary)
                 elif sev == "HIGH" and len(high_recs) < 10:
                     high_recs.append(summary)
-        except Exception:
-            pass
 
         # ── 4. Active security alerts ───────────────────────────────────────
-        # Alerts are active threat detections (anomalous logins, crypto miners,
-        # lateral movement attempts, etc.). Unlike recommendations they mean
-        # something is happening NOW, not just that a setting is misconfigured.
+        alerts_url = (
+            f"{ARM}/subscriptions/{sub}/providers/Microsoft.Security"
+            f"/alerts?api-version=2022-01-01"
+        )
+        raw_alerts = self._get(alerts_url)
+
         alert_counts = defaultdict(int)
         critical_alerts = []
         high_alerts = []
 
-        try:
-            alerts = list(security.alerts.list())
-            for alert in alerts:
-                # Only look at active alerts — dismissed / resolved ones are historical
-                if alert.status in ("Dismissed", "Resolved"):
+        if isinstance(raw_alerts, list):
+            for alert in raw_alerts:
+                props = alert.get("properties", {})
+                if props.get("status") in ("Dismissed", "Resolved"):
                     continue
 
-                sev = (alert.alert_severity or "UNKNOWN").upper()
+                sev = props.get("severity", "UNKNOWN").upper()
                 alert_counts[sev] += 1
 
                 alert_summary = {
-                    "alert_name": alert.alert_display_name or alert.name,
+                    "alert_name": props.get("alertDisplayName") or alert.get("name"),
                     "severity": sev,
-                    "status": alert.status,
-                    "resource_id": (
-                        alert.compromised_entity or
-                        (alert.entities[0].additional_properties.get("$id") if alert.entities else None)
+                    "status": props.get("status"),
+                    "resource_id": props.get("compromisedEntity", "N/A"),
+                    "description": (props.get("description") or "")[:200],
+                    "remediation": (
+                        props.get("remediationSteps", [""])[0]
+                        if props.get("remediationSteps")
+                        else "See Defender for Cloud portal."
                     ),
-                    "description": (alert.description or "")[:200],
-                    "remediation": alert.remediation_steps[0] if alert.remediation_steps else None,
                 }
 
                 if sev == "CRITICAL" and len(critical_alerts) < 10:
                     critical_alerts.append(alert_summary)
                 elif sev == "HIGH" and len(high_alerts) < 10:
                     high_alerts.append(alert_summary)
-        except Exception:
-            pass
 
         # ── 5. Security contacts ─────────────────────────────────────────────
-        # Defender for Cloud should have a security contact email configured
-        # so alerts actually reach a human. A missing contact is a process gap.
+        contacts_url = (
+            f"{ARM}/subscriptions/{sub}/providers/Microsoft.Security"
+            f"/securityContacts?api-version=2020-01-01-preview"
+        )
+        raw_contacts = self._get(contacts_url)
         security_contacts = []
-        try:
-            for contact in security.security_contacts.list():
+
+        if isinstance(raw_contacts, list):
+            for contact in raw_contacts:
+                props = contact.get("properties", {})
                 security_contacts.append({
-                    "email": contact.email,
-                    "phone": contact.phone,
-                    "alert_notifications": contact.alert_notifications,
-                    "alerts_to_admins": contact.alerts_to_admins,
+                    "email": props.get("email"),
+                    "phone": props.get("phone"),
+                    "alert_notifications": props.get("alertNotifications"),
                 })
-        except Exception:
-            pass
 
         # ── Compliance signals ──────────────────────────────────────────────
         return {
@@ -245,19 +213,14 @@ class DefenderCollector(BaseCollector):
             "high_alerts_sample": high_alerts,
             "security_contacts": security_contacts,
             "compliance_signals": {
-                # Core plans should all be enabled
                 "defender_cspm_enabled": plan_status.get("CloudPosture", {}).get("enabled", False),
                 "defender_servers_enabled": plan_status.get("VirtualMachines", {}).get("enabled", False),
                 "defender_storage_enabled": plan_status.get("StorageAccounts", {}).get("enabled", False),
                 "all_expected_plans_enabled": len(plans_disabled) == 0,
-                # Posture health
                 "secure_score_above_70pct": (secure_score or 0) >= 70,
-                # Alert hygiene
                 "no_critical_alerts": alert_counts.get("CRITICAL", 0) == 0,
                 "no_high_alerts": alert_counts.get("HIGH", 0) == 0,
-                # Operational process
                 "security_contact_configured": len(security_contacts) > 0,
-                # For detail rows
                 "critical_alert_count": alert_counts.get("CRITICAL", 0),
                 "high_alert_count": alert_counts.get("HIGH", 0),
             },
@@ -265,7 +228,7 @@ class DefenderCollector(BaseCollector):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Collect Defender for Cloud evidence")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--subscription-id", required=True)
     parser.add_argument("--tenant-id", required=True)
     args = parser.parse_args()
