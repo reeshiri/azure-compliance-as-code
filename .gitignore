@@ -1,0 +1,5 @@
+
+evidence/**/*.json
+reports/*.csv
+reports/*.html
+reports/*.docx
