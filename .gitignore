@@ -3,3 +3,8 @@ evidence/**/*.json
 reports/*.csv
 reports/*.html
 reports/*.docx
+
+evidence/**/*.json
+reports/*.csv
+reports/*.html
+reports/*.docx
