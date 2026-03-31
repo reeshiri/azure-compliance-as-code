@@ -14,3 +14,8 @@ Uses Workload Identity Federation for keyless authentication -- no client
 secrets stored anywhere.
 
 ---
+## Compliance documents
+
+| Document | Description |
+|---|---|
+| [NIST CSF 2.0 Crosswalk](docs/NIST_CSF2_Crosswalk_GCP.docx) | Maps all evidence signals to NIST CSF 2.0 subcategories |
