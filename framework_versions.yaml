@@ -1,0 +1,108 @@
+# framework_versions.yaml
+#
+# PURPOSE:
+#   This file is your source of truth for which version of each compliance
+#   framework your controls.yaml is currently mapped to.
+#
+#   The monitor_frameworks.py script reads this file and compares it
+#   against live checks of official framework sources. When a mismatch
+#   is detected, a GitHub Issue is opened automatically.
+#
+# HOW TO USE THIS FILE:
+#   - Do NOT edit the detection fields (detection_method, source_url, etc.)
+#     Those are read by the script.
+#   - DO update the confirmed_version and last_confirmed_date fields
+#     after you review a change and update controls.yaml.
+#   - Add a note in review_notes to explain what changed and what you did.
+#
+# FIELD GUIDE:
+#   confirmed_version    : The version your controls.yaml is mapped to RIGHT NOW.
+#   last_confirmed_date  : The date you last verified this version is current.
+#   detection_method     : How the script checks for changes (see monitor_frameworks.py).
+#   source_url           : The official page or file the script checks.
+#   expected_hash        : For hash-based detection, the SHA-256 hash of the
+#                          document when you last confirmed it. Leave blank for
+#                          RSS-based detection.
+#   alert_on_change      : Set to true to open a GitHub Issue on any detected change.
+#   review_notes         : Free text. Record what you reviewed and when.
+
+frameworks:
+
+  - id: pci_dss
+    display_name: "PCI-DSS"
+    confirmed_version: "v4.0"
+    last_confirmed_date: "2026-03-25"
+    detection_method: "rss"
+    source_url: "https://www.pcisecuritystandards.org/news-and-events/news/"
+    rss_keywords:
+      - "PCI DSS"
+      - "Data Security Standard"
+      - "version 4"
+      - "v4.0"
+      - "v4.1"
+    expected_hash: ""
+    alert_on_change: true
+    review_notes: >
+      Confirmed v4.0 current as of March 2026. v4.0 was published March 2022
+      with a March 2025 enforcement deadline. controls.yaml mapped to v4.0
+      requirements. Monitor for v4.1 or v5.0 announcement.
+
+  - id: iso_27001
+    display_name: "ISO 27001"
+    confirmed_version: "2022"
+    last_confirmed_date: "2026-03-25"
+    detection_method: "hash"
+    source_url: "https://www.iso.org/standard/27001"
+    expected_hash: ""
+    alert_on_change: true
+    review_notes: >
+      ISO 27001:2022 confirmed current as of March 2026. The 2022 revision
+      replaced the 2013 version and reorganised Annex A to 93 controls.
+      controls.yaml uses A.5.x through A.8.x numbering from the 2022 revision.
+      Hash-based detection used because ISO does not publish an RSS feed.
+
+  - id: soc2
+    display_name: "SOC 2"
+    confirmed_version: "2017 (2022 points of focus)"
+    last_confirmed_date: "2026-03-25"
+    detection_method: "hash"
+    source_url: "https://us.aicpa.org/interestareas/frc/assuranceadvisoryservices/aicpasoc2report"
+    expected_hash: ""
+    alert_on_change: true
+    review_notes: >
+      AICPA Trust Services Criteria 2017 with 2022 points of focus update.
+      controls.yaml uses CC1-CC9 and A1 criteria numbering. The AICPA does
+      not publish a public RSS feed so hash-based detection is used on the
+      AICPA landing page. Changes to this page may indicate a new publication.
+
+  - id: iso_42001
+    display_name: "ISO 42001"
+    confirmed_version: "2023"
+    last_confirmed_date: "2026-03-25"
+    detection_method: "hash"
+    source_url: "https://www.iso.org/standard/81230.html"
+    expected_hash: ""
+    alert_on_change: true
+    review_notes: >
+      ISO 42001:2023 is the first edition of the AI management system standard.
+      Published December 2023. controls.yaml maps AI governance signals to
+      clause 6 and 8 controls. This framework is newer so revision is possible
+      within 3-5 years. Hash-based detection monitors the ISO catalogue page.
+
+  - id: nist_csf
+    display_name: "NIST CSF"
+    confirmed_version: "2.0"
+    last_confirmed_date: "2026-03-25"
+    detection_method: "rss"
+    source_url: "https://www.nist.gov/cyberframework/news-events"
+    rss_keywords:
+      - "Cybersecurity Framework"
+      - "CSF"
+      - "version 2"
+      - "v2"
+    expected_hash: ""
+    alert_on_change: true
+    review_notes: >
+      NIST CSF 2.0 published February 2024. Crosswalk documents in the portfolio
+      reference CSF 2.0 subcategories. NIST publishes updates to csrc.nist.gov.
+      This entry monitors for CSF 2.1 or v3.0 announcements.
