@@ -1,0 +1,167 @@
+# .github/workflows/framework_monitor.yml
+#
+# PURPOSE:
+#   Runs monitor_frameworks.py on a weekly schedule.
+#   When a change is detected, the script exits with code 1,
+#   which marks this workflow run as "failed" in the Actions UI.
+#   A GitHub Issue is also opened automatically with a review checklist.
+#
+# WHY WEEKLY (not daily):
+#   Compliance frameworks update rarely -- PCI-DSS went 10 years between
+#   major versions. Daily checks would be noise. Weekly is enough to catch
+#   announcements within a business week.
+#
+# TRIGGERS:
+#   1. schedule: Every Monday at 07:00 UTC (offset from the 06:00 collector
+#      run so the two workflows do not compete for runner resources)
+#   2. workflow_dispatch: Lets you trigger manually from the Actions tab
+#      with optional dry-run or update-hashes flags
+#
+# SECRETS REQUIRED:
+#   GITHUB_TOKEN is provided automatically by GitHub Actions -- you do not
+#   need to create it. It has the minimum permissions needed to open issues.
+#
+# WHAT IT COMMITS BACK:
+#   After each run, the workflow commits:
+#     - evidence/framework_versions/latest.json
+#     - evidence/framework_versions/YYYYMMDD_HHMMSS.json  (snapshot)
+#     - evidence/framework_versions/stored_hashes.json  (updated hashes)
+#
+#   The stored_hashes.json file is important -- it must be committed back
+#   to the repo so the next run can compare against it. Without this,
+#   every run would be treated as a first-run baseline.
+
+name: Framework Version Monitor
+
+on:
+  schedule:
+    # Every Monday at 07:00 UTC
+    # Cron format: minute hour day-of-month month day-of-week
+    - cron: "0 7 * * 1"
+
+  workflow_dispatch:
+    # Allow manual runs with optional flags
+    inputs:
+      dry_run:
+        description: "Dry run (check only, no GitHub Issues opened)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      update_hashes:
+        description: "Update hashes only (use after cosmetic page changes)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: write   # needed to commit evidence files back to the repo
+  issues: write     # needed to open GitHub Issues when changes are detected
+
+jobs:
+  monitor:
+    name: Check Framework Versions
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out the repository
+      # This downloads all your files to the runner so the script can read
+      # framework_versions.yaml and the stored_hashes.json file.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Fetch all history so the commit step knows what changed
+          fetch-depth: 0
+
+      # Step 2: Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Step 3: Install dependencies
+      # We only need requests and pyyaml for this script.
+      - name: Install dependencies
+        run: |
+          pip install requests pyyaml
+
+      # Step 4: Run the framework monitor
+      # We build the arguments string based on the workflow_dispatch inputs.
+      # On scheduled runs, both inputs are absent so no flags are added.
+      - name: Run framework version monitor
+        id: monitor
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:  ${{ github.repository }}
+        run: |
+          # Build argument string from workflow_dispatch inputs
+          ARGS=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ "${{ github.event.inputs.update_hashes }}" = "true" ]; then
+            ARGS="$ARGS --update-hashes"
+          fi
+
+          # Run the script. The || true prevents the workflow from
+          # stopping before the evidence commit step when the script
+          # exits with code 1 (change detected).
+          python monitor_frameworks.py $ARGS
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+        # continue-on-error allows the commit step to run even if changes
+        # were detected (exit code 1)
+        continue-on-error: true
+
+      # Step 5: Commit evidence files back to the repository
+      # This creates the audit trail. Every run is recorded in git history.
+      - name: Commit evidence
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage the evidence files and stored hashes
+          git add evidence/framework_versions/
+          
+          # Check if there is anything to commit
+          # (first run will always have something; subsequent runs with no
+          # changes may only update the latest.json timestamp)
+          if git diff --staged --quiet; then
+            echo "No evidence file changes to commit."
+          else
+            # Build the commit message
+            # The workflow conclusion tells us whether any changes were detected
+            FAIL_COUNT=$(python -c "
+          import json
+          with open('evidence/framework_versions/latest.json') as f:
+              d = json.load(f)
+          print(d.get('changes_detected', 0))
+          " 2>/dev/null || echo "0")
+
+            git commit -m "chore: framework monitor run $(date -u +%Y-%m-%dT%H:%M:%SZ) | alerts=${FAIL_COUNT}"
+            git push
+          fi
+
+      # Step 6: Surface the result
+      # This makes it easy to see in the Actions log whether alerts were raised.
+      - name: Report result
+        run: |
+          python -c "
+          import json
+          with open('evidence/framework_versions/latest.json') as f:
+              d = json.load(f)
+          changes = d.get('changes_detected', 0)
+          total   = d.get('total_frameworks_checked', 0)
+          status  = d.get('status', 'UNKNOWN')
+          print(f'Frameworks checked: {total}')
+          print(f'Changes detected:   {changes}')
+          print(f'Overall status:     {status}')
+          if changes > 0:
+              print('ACTION REQUIRED: Check GitHub Issues for review checklists.')
+          else:
+              print('All framework versions confirmed unchanged.')
+          "
